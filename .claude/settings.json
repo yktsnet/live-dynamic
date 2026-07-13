@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push origin main*)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(ssh *)",
+      "Bash(rsync *)"
+    ],
+    "allow": [
+      "Bash(git *)",
+      "Bash(gh pr *)",
+      "Bash(pytest *)",
+      "Bash(python -m pytest*)",
+      "Bash(nix-shell -p *)"
+    ]
+  },
+  "attribution": { "commit": "", "pr": "" }
+}
