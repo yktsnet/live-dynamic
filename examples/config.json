@@ -1,0 +1,28 @@
+{
+  "_comment": "Didactic placeholder values for demonstration only. Not a recommendation, and unrelated to any production configuration. Same format as bt-dynamic: the backtest and the live layer share one config file.",
+  "parameters": {
+    "commission_pips": 0.3,
+    "bars_per_window": 6,
+    "ax2_mean_bars": 48,
+    "trade_end_hour": 17,
+    "tp_pips": 20.0,
+    "sl_pips": 10.0,
+    "pip": 0.01,
+    "ax1_weak": 20.0,
+    "ax1_strong": 25.0,
+    "vol_lo": 0.8,
+    "vol_hi": 1.2,
+    "direction_band": 5.0
+  },
+  "regime_strategy": {
+    "0,0": "flip",
+    "0,1": "flip",
+    "0,2": null,
+    "1,0": null,
+    "1,1": null,
+    "1,2": null,
+    "2,0": null,
+    "2,1": "follow",
+    "2,2": "follow"
+  }
+}
