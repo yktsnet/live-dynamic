@@ -35,36 +35,46 @@ cat $LIVE_DYNAMIC_DATA/state/sent.jsonl     # send records with dry_run=true
 
 Signal generation (`build_signal`) and order sending (`sender_gate`) are deliberately separated. The former never talks to the broker, so it can be verified without credentials; the only thing between them is the append-only `signal.jsonl`.
 
+Below is the main path up to order submission. The halt and force-close paths are split out into the diagram under [Safety Design](#safety-design).
+
 ```mermaid
-flowchart LR
-    subgraph timers["systemd timers (oneshot)"]
-        FB[fetch_bars<br/>every 5 min]
-        OR[orchestrator<br/>every 30 min]
-        HC[halt_check<br/>every 5 min]
-        EOD[eod_close<br/>daily]
-        TR[token_refresh<br/>every 5 min]
+flowchart TD
+    subgraph offline["runs without credentials"]
+        BARS[("bars/*.jsonl")] --> BS["build_signal<br/>decide() = bt_dynamic"]
     end
 
-    FB --> BARS[(bars/*.jsonl)]
-    BARS --> BS[build_signal]
-    OR --> BS
-    BS -- decide()<br/>bt_dynamic --> SIG[(signal.jsonl)]
-    SIG --> SG[sender_gate]
-    OR --> SG
-    SG -- idempotency check +<br/>dry_run gate --> BROKER[Broker OpenAPI]
-    SG --> SENT[(sent.jsonl)]
-    SG -- after fill --> OCO[oco_manager<br/>places TP/SL]
-    HALT[(halt_flags.jsonl)] -.-> BS
-    HALT -.-> HC
-    HC --> FC[force_close]
-    EOD --> FC
-    FC --> BROKER
-    TR --> TOKEN[(tokens/)]
+    BS --> SIG[/"signal.jsonl<br/>append-only, the only contact point"/]
+
+    subgraph online["talks to the broker"]
+        SG{"sender_gate"} --> SENT[("sent.jsonl")]
+    end
+
+    SIG --> SG
+    SG -->|"slot already sent / dry_run"| SKIP(["no order"])
+    SG -->|"unsent and live trading ON"| BROKER[("Broker OpenAPI")]
 ```
+
+Each stage is driven by a systemd oneshot timer (`fetch_bars` every 5 min, `orchestrator` every 30 min, `token_refresh` every 5 min). `fetch_bars` keeps `bars/*.jsonl` current and `token_refresh` maintains `tokens/`.
 
 ## Safety Design
 
 This is the heart of the repository. Even a correct strategy loses money if the execution layer is broken. The invariants protecting real funds are published as-is, with the code and tests that enforce them.
+
+Three independent paths can close an open position. If any one of them fails, the others still close it.
+
+```mermaid
+flowchart TD
+    POS(["open position"])
+    POS --> OCO{{"oco_manager<br/>TP/SL right after entry"}}
+    POS --> EOD{{"eod_close<br/>at session end"}}
+    POS --> HC{{"halt_check<br/>every 5 min"}}
+    HALT[/"append one line to halt_flags.jsonl"/] -.->|"halt flag"| HC
+    HALT -.->|"signal generation stops too"| BS["build_signal"]
+    OCO --> CLOSED[("position closed")]
+    EOD --> FC["force_close"]
+    HC --> FC
+    FC --> CLOSED
+```
 
 - **Idempotency**: `sender_gate` checks the decision slot (`time_utc`) against the send log (`sent.jsonl`) and never sends the same slot twice. Overlapping timer runs and manual reruns are safe
 - **dry_run by default**: `ENABLE_EXEC_REQUESTS=0` is the default. Switching to live is one line in an env file, no restart required. If you forget to switch, it fails toward not trading

@@ -35,36 +35,46 @@ cat $LIVE_DYNAMIC_DATA/state/sent.jsonl     # dry_run=true の送信記録
 
 シグナル生成（`build_signal`）と発注（`sender_gate`）は意図的に分離している。前者はブローカーに一切接続しないため資格情報なしで検証でき、間をつなぐのは追記専用の `signal.jsonl` だけである。
 
+以下は発注までの主経路。停止・強制決済の経路は [Safety Design](#safety-design) の図に分けてある。
+
 ```mermaid
-flowchart LR
-    subgraph timers["systemd timers (oneshot)"]
-        FB[fetch_bars<br/>5分ごと]
-        OR[orchestrator<br/>30分ごと]
-        HC[halt_check<br/>5分ごと]
-        EOD[eod_close<br/>日次]
-        TR[token_refresh<br/>5分ごと]
+flowchart TD
+    subgraph offline["資格情報なしで動く"]
+        BARS[("bars/*.jsonl")] --> BS["build_signal<br/>decide() = bt_dynamic"]
     end
 
-    FB --> BARS[(bars/*.jsonl)]
-    BARS --> BS[build_signal]
-    OR --> BS
-    BS -- decide()<br/>bt_dynamic --> SIG[(signal.jsonl)]
-    SIG --> SG[sender_gate]
-    OR --> SG
-    SG -- 冪等チェック +<br/>dry_run ゲート --> BROKER[Broker OpenAPI]
-    SG --> SENT[(sent.jsonl)]
-    SG -- 約定後 --> OCO[oco_manager<br/>TP/SL 配置]
-    HALT[(halt_flags.jsonl)] -.-> BS
-    HALT -.-> HC
-    HC --> FC[force_close]
-    EOD --> FC
-    FC --> BROKER
-    TR --> TOKEN[(tokens/)]
+    BS --> SIG[/"signal.jsonl<br/>追記専用・唯一の接点"/]
+
+    subgraph online["ブローカーに接続する"]
+        SG{"sender_gate"} --> SENT[("sent.jsonl")]
+    end
+
+    SIG --> SG
+    SG -->|"同スロット送信済み / dry_run"| SKIP(["発注しない"])
+    SG -->|"未送信 かつ 実発注 ON"| BROKER[("Broker OpenAPI")]
 ```
+
+各段は systemd の oneshot timer が駆動する（`fetch_bars` 5分・`orchestrator` 30分・`token_refresh` 5分）。`fetch_bars` が `bars/*.jsonl` を更新し、`token_refresh` が `tokens/` を維持する。
 
 ## Safety Design
 
 このリポの本体。戦略が正しくても実行層が壊れていれば資金は守れない。実弾で守っている不変条件を、そのままコードとテストで公開している。
+
+建玉を閉じる経路は独立に3つある。どれか一つが死んでも残りが閉じる。
+
+```mermaid
+flowchart TD
+    POS(["建玉あり"])
+    POS --> OCO{{"oco_manager<br/>エントリー直後に TP/SL"}}
+    POS --> EOD{{"eod_close<br/>セッション終了時"}}
+    POS --> HC{{"halt_check<br/>5分ごと"}}
+    HALT[/"halt_flags.jsonl に1行追記"/] -.->|"停止フラグ"| HC
+    HALT -.->|"シグナル生成も止まる"| BS["build_signal"]
+    OCO --> CLOSED[("建玉が閉じる")]
+    EOD --> FC["force_close"]
+    HC --> FC
+    FC --> CLOSED
+```
 
 - **冪等性**: `sender_gate` は送信済み記録（`sent.jsonl`）と判定スロット（`time_utc`）を照合し、同じスロットでは二度発注しない。timer の再実行・手動実行が重なっても安全
 - **dry_run 既定**: `ENABLE_EXEC_REQUESTS=0` が既定。実発注への切替は env ファイル1行で、再起動不要。切替を忘れて動かしても発注されない側に倒れる
