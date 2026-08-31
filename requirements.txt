@@ -1,2 +1,2 @@
-bt-dynamic>=0.1.6
+bt-dynamic>=0.2.0
 pandas
